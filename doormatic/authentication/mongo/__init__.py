@@ -4,7 +4,8 @@ from pymongo.errors import ServerSelectionTimeoutError
 import pyotp
 import datetime
 import logging
-import hashlib
+import bcrypt
+
 
 class DoormaticMongoAuth:
     client = None
@@ -13,7 +14,7 @@ class DoormaticMongoAuth:
     server_port = 27017
     db = None
     posts = None
-    salt = None
+    salt = int(12)
 
     def __init__(self,  hostname="localhost", port=27017, database="admin", salt=None):
         self.server_address = hostname
@@ -23,7 +24,7 @@ class DoormaticMongoAuth:
         self.db = self.client[self.server_database]
         self.posts = self.db.posts
         if salt:
-            self.salt = str(salt).encode("utf-8")
+            self.salt = int(salt)
 
     def _get_user(self, user, search_by="chat_id"):
         if search_by is "id":
@@ -32,7 +33,7 @@ class DoormaticMongoAuth:
             search_match = {"username": user}
         elif search_by is "chat_id":
             search_match = {"chat_id": user}
-            logging.debug("get_user: search_match: {}".format(search_match))
+            logging.info("get_user: search_match: {}".format(search_match))
         else:
             return False
 
@@ -51,15 +52,14 @@ class DoormaticMongoAuth:
         user_data = self._get_user(user, search_by)
         if user_data and password:
             if "password" in user_data:
-                if self.salt:
-                    password = self.salt + str(password).rstrip("\n").encode("utf-8")
-                else:
-                    password = str(password).rstrip("\n").encode("utf-8")
-
-                expected_password = hashlib.sha256(password).hexdigest()
-                # print("Expected:\t {}\nGot:\t\t {}".format(expected_password,user_data['password']))
-                if expected_password == user_data['password']:
+                password = password.encode("utf-8")
+                if bcrypt.hashpw(
+                        password,
+                        user_data['password'],
+                ) == user_data['password']:
                     return True
+                else:
+                    print("got\t\t {}\nexpected\t {}".format(bcrypt.hashpw(password,user_data['password']), user_data['password']) )
         return False
 
     def get_user_totp(self, user, search_by="chat_id"):
@@ -94,11 +94,11 @@ class DoormaticMongoAuth:
         pass
 
     def set_password(self, user, new_password, search_by="chat_id"):
-        if self.salt:
-            new_password = self.salt + str(new_password).rstrip("\n").encode("utf-8")
-        else:
-            new_password = str(new_password).rstrip("\n").encode("utf-8")
-        users_new_password = hashlib.sha256(new_password).hexdigest()
+        if not new_password:
+            logging.error("Empty password requested for update")
+            return False
+        new_password = new_password.encode("utf-8")
+        users_new_password = bcrypt.hashpw(new_password, bcrypt.gensalt(self.salt))
         if self._update_user(user, update_key="password", update_value=users_new_password):
             return True
         return False
@@ -109,7 +109,7 @@ class DoormaticMongoAuth:
         if selected_user:
             if self.posts.update_one(
                     {"_id": selected_user['_id']},
-                    {"$set": { update_key: update_value }},
+                    {"$set": {update_key: update_value}},
                     upsert=False,):
                 return True
         return False
