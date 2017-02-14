@@ -1,9 +1,10 @@
+# -*- coding: utf-8 -*-
 from pymongo import MongoClient
 from pymongo.errors import ServerSelectionTimeoutError
 import pyotp
 import datetime
 import logging
-
+import hashlib
 
 class DoormaticMongoAuth:
     client = None
@@ -12,14 +13,17 @@ class DoormaticMongoAuth:
     server_port = 27017
     db = None
     posts = None
+    salt = None
 
-    def __init__(self,  hostname="localhost", port=27017, database="admin"):
+    def __init__(self,  hostname="localhost", port=27017, database="admin", salt=None):
         self.server_address = hostname
         self.server_port = port
         self.server_database = database
         self.client = MongoClient(self.server_address, self.server_port)
         self.db = self.client[self.server_database]
         self.posts = self.db.posts
+        if salt:
+            self.salt = str(salt).encode("utf-8")
 
     def _get_user(self, user, search_by="chat_id"):
         if search_by is "id":
@@ -45,13 +49,21 @@ class DoormaticMongoAuth:
 
     def validate_user(self, user, password, search_by="chat_id"):
         user_data = self._get_user(user, search_by)
-        if user_data:
+        if user_data and password:
             if "password" in user_data:
-                if password == user_data['password']:
+                if self.salt:
+                    password = self.salt + str(password).rstrip("\n").encode("utf-8")
+                else:
+                    password = str(password).rstrip("\n").encode("utf-8")
+
+                expected_password = hashlib.sha256(password).hexdigest()
+                # print("Expected:\t {}\nGot:\t\t {}".format(expected_password,user_data['password']))
+                if expected_password == user_data['password']:
                     return True
         return False
 
     def get_user_totp(self, user, search_by="chat_id"):
+        current_token = None
         user_data = self._get_user(user, search_by)
         if user_data:
             if "totp_key" in user_data:
@@ -80,6 +92,27 @@ class DoormaticMongoAuth:
     # TODO: Create user deletion
     def delete_user(self, user, search_by="chat_id"):
         pass
+
+    def set_password(self, user, new_password, search_by="chat_id"):
+        if self.salt:
+            new_password = self.salt + str(new_password).rstrip("\n").encode("utf-8")
+        else:
+            new_password = str(new_password).rstrip("\n").encode("utf-8")
+        users_new_password = hashlib.sha256(new_password).hexdigest()
+        if self._update_user(user, update_key="password", update_value=users_new_password):
+            return True
+        return False
+
+    # Mind what you update...
+    def _update_user(self, user, update_key, update_value, search_by="chat_id"):
+        selected_user = self._get_user(user, search_by)
+        if selected_user:
+            if self.posts.update_one(
+                    {"_id": selected_user['_id']},
+                    {"$set": { update_key: update_value }},
+                    upsert=False,):
+                return True
+        return False
 
     def add_user(self, chat_id, username, name, totp_key, phone):
         if self.user_exists(chat_id):
