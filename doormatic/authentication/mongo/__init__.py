@@ -129,6 +129,7 @@ class DoormaticMongoAuth:
         return self._add_entry(new_user)
 
     def _add_entry(self, entry):
+        post_id = None
         try:
             post_id = self.posts.insert_one(entry).inserted_id
             if post_id:
